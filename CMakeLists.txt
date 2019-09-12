@@ -1,5 +1,5 @@
 # Minimum version required
-cmake_minimum_required (VERSION 3.2)
+cmake_minimum_required(VERSION 3.13)
 
 # Project name
 project (osqp)
@@ -157,18 +157,19 @@ if (NOT MSVC)
     endif()
 endif (NOT MSVC)
 
+# An empty library for OSQP sources.  All
+# subdirectory sources will be assembled here
+# ----------------------------------------------
+add_library(OSQPLIB OBJECT "")
+
 # Set OSQP core sources and includes
 # ----------------------------------------------
 add_subdirectory (src)
 add_subdirectory (include)
 
-#location of the osqp api includes
-set(osqp_api_includes ${CMAKE_CURRENT_SOURCE_DIR}/include/)
-
 # Algebra implementation and CSC support
 # ----------------------------------------------
 add_subdirectory(algebra)
-set(osqp_objects $<TARGET_OBJECTS:osqp_algebra>)
 
 
 # if we are building the Python interface, let's look for Python
@@ -269,15 +270,10 @@ endif (R_LANG)
 add_subdirectory(lin_sys)
 
 # Static library
-add_library (osqpstatic STATIC ${osqp_src} ${osqp_objects} ${osqp_headers} ${linsys_solvers})
+add_library(osqpstatic STATIC $<TARGET_OBJECTS:OSQPLIB> $<TARGET_OBJECTS:qdldlobject>)
 
 # Give same name to static library output
 set_target_properties(osqpstatic PROPERTIES OUTPUT_NAME osqp)
-
-# Include directories for linear system solvers
-target_include_directories(osqpstatic PRIVATE
-                           ${linsys_solvers_includes}
-                           ${csc_tools_includes})
 
 
 # Declare include directories for the cmake exported target
@@ -310,25 +306,21 @@ endif (MATLAB)
 # If we are building Python/Matlab/R interface:
 #   - do not build shared library
 #   - do not build demo
+
 if (NOT PYTHON AND NOT MATLAB AND NOT R_LANG AND NOT EMBEDDED)
     # Create osqp shared library
     # NB: Add all the linear system solvers here
-    add_library (osqp SHARED ${osqp_src} ${osqp_headers} ${osqp_objects} ${linsys_solvers})
-
-    # Include directories for linear system solvers
-    target_include_directories(osqp PRIVATE ${linsys_solvers_includes})
-
-    #include directories for csc utilities
-    target_include_directories(osqp PRIVATE ${csc_tools_includes})
+    add_library(osqp SHARED $<TARGET_OBJECTS:OSQPLIB> $<TARGET_OBJECTS:qdldlobject>)
 
     # Declare include directories for the cmake exported target
     target_include_directories(osqp
-                               PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
-                                      "$<INSTALL_INTERFACE:$<INSTALL_PREFIX>/${CMAKE_INSTALL_INCLUDEDIR}/osqp>")
+            PUBLIC
+            "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+            "$<INSTALL_INTERFACE:$<INSTALL_PREFIX>/${CMAKE_INSTALL_INCLUDEDIR}/osqp>")
 
     # Install osqp shared library
     install(TARGETS osqp
-            EXPORT  ${PROJECT_NAME}
+            EXPORT        ${PROJECT_NAME}
             LIBRARY       DESTINATION "${CMAKE_INSTALL_LIBDIR}"
             ARCHIVE       DESTINATION "${CMAKE_INSTALL_LIBDIR}"
             RUNTIME       DESTINATION "${CMAKE_INSTALL_BINDIR}")
@@ -379,87 +371,8 @@ if(NOT TARGET uninstall)
         COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake)
 endif()
 
-
-
-# Add testing
+#unit testing
 # ----------------------------------------------
-# Add custom command to generate tests
 if (UNITTESTS)
-    find_package(PythonInterp)
-    if(NOT PYTHONINTERP_FOUND)
-        message( FATAL_ERROR "You need python installed to generate unittests. If you do not want to compile the unittests pass -DUNITTESTS=OFF to cmake." )
-    endif()
-
-    INCLUDE(FindPythonModule)
-    find_python_module(numpy)
-    IF(NOT NUMPY_FOUND)
-        message( FATAL_ERROR "You need numpy python module installed to generate unittests. If you do not want to compile the unittests pass -DUNITTESTS=OFF to cmake." )
-    ENDIF()
-
-    find_python_module(scipy)
-    # Check scipy version for sparse.random functionalities
-    IF((NOT SCIPY_FOUND) OR (SCIPY_VERSION VERSION_LESS 0.17.0))
-        message( FATAL_ERROR "You need scipy python module installed to generate unittests. If you do not want to compile the unittests pass -DUNITTESTS=OFF to cmake." )
-    ENDIF()
-
-    find_python_module(__future__)
-    IF(NOT __FUTURE___FOUND)
-        message( FATAL_ERROR "You need future python module installed to generate unittests. If you do not want to compile the unittests pass -DUNITTESTS=OFF to cmake." )
-    ENDIF()
-
-    # Add test_headers and codegen_test_headers
-    add_subdirectory(tests)
-
-    # Generating tests.stamp so that the test data are not always generated
-    # set(data_timestamp ${PROJECT_SOURCE_DIR}/tests/tests_data.stamp)
-    add_custom_command(
-        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/tests
-        COMMAND ${PYTHON_EXECUTABLE} generate_tests_data.py
-        DEPENDS ${PROJECT_SOURCE_DIR}/tests/generate_tests_data.py
-        OUTPUT ${codegen_test_headers}
-        COMMENT "Generating unittests data files using Python"
-    )
-
-    # Direct linear solver testing
-    include_directories(tests)
-
-    add_executable(osqp_tester
-                ${PROJECT_SOURCE_DIR}/tests/osqp_tester.c
-                ${PROJECT_SOURCE_DIR}/tests/osqp_tester.h
-		            ${PROJECT_SOURCE_DIR}/tests/minunit.h
-                ${linsys_solvers_includes}
-                ${test_headers}
-                ${codegen_test_headers})
-
-    target_include_directories(osqp_tester PRIVATE
-                               ${linsys_solvers_includes}
-                               ${csc_tools_includes}
-                               )
-
-    target_link_libraries (osqp_tester osqpstatic)
-
-
-    # Add custom memory target
-    add_executable(osqp_tester_custom_memory
-                   EXCLUDE_FROM_ALL
-                   ${PROJECT_SOURCE_DIR}/tests/osqp_tester.c
-                   ${PROJECT_SOURCE_DIR}/tests/osqp_tester.h
-	           ${PROJECT_SOURCE_DIR}/tests/minunit.h
-                   ${test_headers}
-                   ${csc_tools_includes}
-                   ${codegen_test_headers}
-		   ${PROJECT_SOURCE_DIR}/tests/custom_memory/custom_memory.c
-		   ${PROJECT_SOURCE_DIR}/tests/custom_memory/custom_memory.h
-		)
-    target_link_libraries(osqp_tester_custom_memory osqpstatic)
-
-    target_include_directories(osqp_tester_custom_memory PRIVATE
-                               ${linsys_solvers_includes}
-                               ${csc_tools_includes}
-                               )
-
-    # Add testing
-    include(CTest)
-    enable_testing()
-    add_test(NAME tester COMMAND $<TARGET_FILE:osqp_tester>)
+  add_subdirectory(tests)
 endif()
